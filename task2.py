@@ -10,9 +10,9 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 # 1. Data Loader Class
 # ==========================================
 class DataLoader:
-    def __init__(self, file_path: str, feature: str, target: str, sep: str = ',') -> None:
+    def __init__(self, file_path: str, features: list[str], target: str, sep: str = ',') -> None:
         self.file_path: str = file_path
-        self.feature: str = feature
+        self.features: list[str] = features
         self.target: str = target
         self.sep: str = sep
 
@@ -27,19 +27,17 @@ class DataLoader:
     def load_and_split(self, test_size: float = 0.2, random_state: int = 42) -> None:
         df: pd.DataFrame = pd.read_csv(self.file_path, sep=self.sep)
 
-        initial_rows = len(df)
-        df = df.dropna(subset=([self.feature, self.target]))
-        dropped_rows = initial_rows - len(df)
-        if dropped_rows > 0:
-            print(f"{dropped_rows} rows have been deleted due to missing values.")
-            
-        X: pd.DataFrame = df[[self.feature]].copy()
+        required_cols = self.features + [self.target]
+        df = df.dropna(subset=required_cols)
+
+        X: pd.DataFrame = df[self.features].copy()
         y: pd.Series = df[self.target]
 
-        if X[self.feature].dtype == 'object':
-            print(f"Feature: {self.feature} is categorical, encoding to numerical...")
-            encoder = LabelEncoder()
-            X[self.feature] = encoder.fit_transform(X[self.feature])
+        for col in self.features:
+            if X[col].dtype == 'object':
+                print(f"Feature: {col} is categorical, encoding to numerical...")
+                encoder = LabelEncoder()
+                X[col] = encoder.fit_transform(X[col])
 
         if y.dtype == 'object':
             print(f"Target: {self.target} is categorical, encoding to numerical...")
@@ -57,13 +55,20 @@ class DataLoader:
             print('You have to load the data first.')
             return
         
-        plt.figure(figsize=(6, 4))
-        plt.scatter(self._X_full[self.feature], self._y_full,
-                    s=16, alpha=0.6, color="#7A8B99")
-        plt.xlabel(self.feature)
-        plt.ylabel(self.target)
-        plt.title(title)
-        plt.show()
+        num_features = len(self.features)
+        fig, axes = plt.subplots(1, num_features, figsize=(4 * num_features, 4))
+        if num_features == 1:
+            axes = [axes]
+
+        for ax, col in zip(axes, self.features):
+            ax.scatter(self._X_full[col], self._y_full, s=16, alpha=0.6, color="#7A8B99")
+            ax.set_xlabel(col)
+            ax.set_ylabel(self.target)
+            ax.set_title(f"{col} vs {self.target}")
+
+        plt.suptitle(title)
+        plt.tight_layout()
+        plt.show(block=False)
 
     @property
     def X_train(self) -> pd.DataFrame | None:
@@ -85,7 +90,7 @@ class DataLoader:
     def summary(self) -> str:
         if self._X_train is not None:
             return (
-                f"Feature (X)      : {self.feature}\n"
+                f"Features (X)     : {', '.join(self.features)}\n"
                 f"Target (y)       : {self.target}\n"
                 f"Training Samples : {self._X_train.shape[0]}\n"
                 f"Testing Samples  : {self._X_test.shape[0]}"
@@ -105,9 +110,13 @@ class ModelTrainer:
         self.model.fit(X_train, y_train)
         self.is_trained = True
         b0: float = float(self.model.intercept_)
-        b1: float = float(self.model.coef_[0])
+        coefficients = self.model.coef_
 
-        print(f"Model has been trained successfully! Intercept: {b0:.2f}, Slope: {b1:.2f}")
+        print(f"Model has been trained successfully!")
+        print(f"Intercept (b0): {b0:.2f}")
+        for col, coef in zip(X_train.columns, coefficients):
+            print(f"Coeff ({col}): {coef:.4f}")
+
         return self.model
 
 
@@ -151,21 +160,23 @@ class ModelEvaluator:
         r2 = r2_score(self.y_test, self.y_pred)
  
         fig, ax = plt.subplots(1, 2, figsize=(11, 4))
-        ax[0].scatter(self.X_test, self.y_test, s=15, alpha=0.6, color='#7A8B99', label='test data')
-        ax[0].plot(self.X_test, self.y_pred, color='#C8553D', lw=3, label='model')
-        ax[0].set_xlabel(self.X_test.columns[0])
-        ax[0].set_ylabel(self.y_test.name)
+        
+        lims = [min(self.y_test.min(), self.y_pred.min()), max(self.y_test.max(), self.y_pred.max())]
+        ax[0].scatter(self.y_test, self.y_pred, s=20, alpha=0.7, color='#7A8B99')
+        ax[0].plot(lims, lims, "r--", label="Perfect Prediction")
+        ax[0].set_xlabel("Actual Sales")
+        ax[0].set_ylabel("Predicted Sales")
+        ax[0].set_title(f"Actual vs Predicted (R2 = {r2:,.2f})")
         ax[0].legend()
- 
-        lims = [self.y_test.min(), self.y_test.max()]
-        ax[1].scatter(self.y_test, self.y_pred, s=15, alpha=0.7, color='#7A8B99')
-        ax[1].plot(lims, lims, "r--", label="perfect prediction")
-        ax[1].set_xlabel("actual")
-        ax[1].set_ylabel("predicted")
-        ax[1].set_title(f"Actual vs Predicted (R2 = {r2:,.2f})")
-        ax[1].legend()
+
+        ax[1].scatter(self.y_pred, self.residuals, s=20, alpha=0.7, color='#C8553D')
+        ax[1].axhline(y=0, color='black', linestyle='--')
+        ax[1].set_xlabel("Predicted Sales")
+        ax[1].set_ylabel("Residuals (Error)")
+        ax[1].set_title("Residuals Analysis")
+
         plt.tight_layout()
-        plt.show()
+        plt.show(block=False)
 
         print(f"Mean Residual (Error Bias): {self.residuals.mean():.4f}")
 
@@ -174,23 +185,24 @@ class ModelEvaluator:
 # 4. Pipeline Execution
 # ==========================================
 if __name__ == "__main__":
-    # Load and prepare data
-    dt = DataLoader(file_path="Advertising.csv", feature='TV', target='Sales', sep=';')
+    features_list = ['TV', 'Radio', 'Newspaper']
+    
+    dt = DataLoader(file_path="Advertising.csv", features=features_list, target='Sales', sep=',')
     dt.load_and_split(test_size=0.2, random_state=42)
     dt.plot_first_data()
 
     print(dt.summary)
     print('=' * 40)
 
-    # Train the model
     trainer = ModelTrainer()
     trained_model = trainer.train(dt.X_train, dt.y_train)
 
     print('=' * 40)
 
-    # Evaluate the model
     evaluator = ModelEvaluator(model=trained_model, X_test=dt.X_test, y_test=dt.y_test)
     metrics = evaluator.evaluate_metrics()
 
     print('=' * 40)
     evaluator.plot_results()
+
+    plt.show()
